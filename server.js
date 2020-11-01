@@ -4,6 +4,7 @@ const { join, parse, isAbsolute } = require('path');
 
 const diff = require('fast-diff');
 const findPkgDir = require('./lib/find-pkg-dir');
+const os = require('os');
 const parseUri = require('vscode-uri').URI.parse;
 const pathIsInside = require('path-is-inside');
 const stylelintVSCode = require('./lib/stylelint-vscode');
@@ -23,6 +24,7 @@ const {
 	DiagnosticCode,
 	MarkupKind,
 	InsertTextFormat,
+	Command,
 } = require('vscode-languageserver');
 const { TextDocument } = require('vscode-languageserver-textdocument');
 
@@ -432,6 +434,88 @@ connection.onCodeAction(async (params) => {
 
 		const diagnostics = params.context.diagnostics;
 		const needlessDisables = needlessDisableReports.get(uri) || invalidScopeDisableReports.get(uri);
+
+		for (const diagnostic of diagnostics) {
+			if (diagnostic.source !== 'stylelint') {
+				break;
+			}
+
+			const codeValue = DiagnosticCode.is(diagnostic.code) && diagnostic.code.value;
+			const ruleId = typeof codeValue === 'string' ? codeValue : undefined;
+
+			if (!ruleId) {
+				break;
+			}
+
+			const lineText = textDocument.getText(
+				Range.create(
+					Position.create(diagnostic.range.start.line, 0),
+					Position.create(diagnostic.range.start.line, Number.MAX_VALUE),
+				),
+			);
+			const matches = /^([ \t]*)/.exec(lineText);
+			const lineIndentation = matches !== null && matches.length > 0 ? matches[1] : '';
+
+			return [
+				//TODO: these actions need to be aggregated properly, along with the other diagnostics and "if"s
+				//TODO: extract each code action to a generator function
+				CodeAction.create(
+					'Fix all stylelint problems in this file',
+					Command.create(
+						'Fix all stylelint problems in this file',
+						CommandIds.applyAutoFix,
+						textDocumentIdentifer,
+					),
+					CodeActionKind.QuickFix,
+				),
+				CodeAction.create(
+					`Disable rule "${ruleId}" for this line`,
+					{
+						documentChanges: [
+							TextDocumentEdit.create(textDocumentIdentifer, [
+								{
+									range: {
+										start: {
+											line: diagnostic.range.start.line,
+											character: 0,
+										},
+										end: {
+											line: diagnostic.range.start.line,
+											character: 0,
+										},
+									},
+									newText: `${lineIndentation}/* stylelint-disable-next-line ${ruleId} */${os.EOL}`,
+								},
+							]),
+						],
+					},
+					CodeActionKind.QuickFix,
+				),
+				CodeAction.create(
+					`Disable rule "${ruleId}" for the entire file`,
+					{
+						documentChanges: [
+							TextDocumentEdit.create(textDocumentIdentifer, [
+								{
+									range: {
+										start: {
+											line: 0,
+											character: 0,
+										},
+										end: {
+											line: 0,
+											character: 0,
+										},
+									},
+									newText: `/* stylelint-disable ${ruleId} */${os.EOL}`,
+								},
+							]),
+						],
+					},
+					CodeActionKind.QuickFix,
+				),
+			];
+		}
 
 		if (!needlessDisables) {
 			return [];
